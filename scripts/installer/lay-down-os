@@ -1,0 +1,114 @@
+#!/bin/bash
+set -e -x
+
+SCRIPTS_DIR=$(dirname ${0})
+
+VERSION=${VERSION:?"VERSION not set"}
+
+while getopts "i:f:c:d:t:r:o:ka:" OPTION
+do
+    case ${OPTION} in
+        i) DIST="$OPTARG" ;;
+        f) FILES="$OPTARG" ;;
+        c) CLOUD_CONFIG="$OPTARG" ;;
+        d) DEVICE="$OPTARG" ;;
+        o) OEM="$OPTARG" ;;
+        r) ROLLBACK_VERSION="$OPTARG" ;;
+        k) KEXEC=y ;;
+        a) APPEND="$OPTARG" ;;
+        t) ENV="$OPTARG" ;;
+        *) exit 1 ;;
+    esac
+done
+
+DEVICE=${DEVICE:?"Need to Pass a device name -d <dev>."}
+DIST=${DIST:-/dist}
+CLOUD_CONFIG=${CLOUD_CONFIG:-"${SCRIPTS_DIR}/conf/empty.yml"}
+CONSOLE=ttyS0
+SDA1="/mnt/sda1"
+SDA2="/mnt/sda2"
+# Will need to make it so that our builds and packer APIs remain consistent.
+
+format_device() {
+    mkfs.vfat ${DEVICE}1
+    mkfs.ext4 -F -i 4096 -L RANCHER_STATE ${DEVICE}2
+}
+
+mount_device() {
+    mkdir -p ${SDA1}
+    mkdir -p ${SDA2}
+    mount ${DEVICE}1 ${SDA1}
+    mount ${DEVICE}2 ${SDA2}
+    trap "umount ${SDA1}; umount ${SDA2}" EXIT
+}
+
+install_grub() {
+    mkdir -p ${SDA1}/EFI/GRUB2
+    cp -a /root/grubaa64.efi ${SDA1}/EFI/GRUB2/
+}
+
+menuentry() {
+    local VER="$1"
+    cat <<EOF
+
+menuentry "RancherOS ${VER}" --id ros-${VER} {
+  search --no-floppy --fs-uuid --set=root $(blkid -o export ${DEVICE}2 | grep '^UUID=' | sed 's/UUID=//')
+  linux /boot/ros-${VER}/$(cd ${SDA2}/boot/ros-${VER}; ls vmlinu?) console=ttyS0,115200 earlycon=uart8250,mmio32,0x80300000
+  devicetree /boot/ros-${VER}/$(cd ${SDA2}/boot/ros-${VER}; ls *.dtb)
+  initrd /boot/ros-${VER}/initrd
+}
+EOF
+}
+
+grub_config() {
+    local grub_cfg=${SDA1}/grub.cfg
+    cat >${grub_cfg} <<EOF
+set default="ros-${VERSION}"
+set timeout="1"
+EOF
+
+    if [ ! -z ${ROLLBACK_VERSION} ]; then
+        echo "set fallback=\"ros-${ROLLBACK_VERSION}\"" >> ${grub_cfg}
+    fi
+    menuentry ${VERSION} >> ${grub_cfg}
+    if [ ! -z ${ROLLBACK_VERSION} ]; then
+        menuentry ${ROLLBACK_VERSION} >> ${grub_cfg}
+    fi
+}
+
+install_ros() {
+    mkdir -p ${SDA2}/boot/ros-${VERSION}
+    cp ${DIST}/* ${SDA2}/boot/ros-${VERSION}/
+}
+
+format_and_mount() {
+    format_device
+    mount_device
+}
+
+if [ -n ${ENV} ]; then
+    case ${ENV} in
+        "generic")
+            format_and_mount
+            install_grub
+            "${SCRIPTS_DIR}/seed-data" ${SDA2} ${CLOUD_CONFIG} ${FILES}
+            ;;
+        "rancher-upgrade")
+            mount_device 
+            ;;
+        *)
+            echo "$ENV is not a valid environment" 1>&2
+            exit 1
+            ;;
+    esac
+fi
+
+install_ros
+grub_config
+
+if [ "$KEXEC" = "y" ]; then
+    if [ "$APPEND" = "" ]; then
+        APPEND=$(cat /proc/cmdline)
+    fi
+    kexec -l ${DIST}/vmlinuz --initrd=${DIST}/initrd --append="$APPEND" -f
+fi
