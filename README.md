@@ -1,31 +1,31 @@
 
-# `rancher/os` installer container
+# `rancher/os` installer
 
 The container can be used directly, but there is a wrapper in RancherOS CLI, `ros install`, that handles calling things in the right order.
 
-##Basics
+## Building
 
-When booting from the ISO file RancherOS runs completely from memory. In order to run more containers, and save state between reboots, you need to persist and run from disk. 
+First, build RancherOS minimal set of artifacts: `initrd`, `vmlinuz`. You will also need the .dtb file for the board you're targeting (in case of Estuary D02 that's `hip05-d02.dtb`). Copy those files into `./dist/artifacts` of this repo. Then run the following:
 
-When booting, RancherOS looks for a device labeled "RANCHER_STATE". If it finds a volume with that labeled the OS will mount the device and use it to store state. 
+```
+docker build -t rancher/os:v0.4.5_arm64 --build-arg VERSION=v0.4.5 .
+```
 
-The scripts in this container will create a device labeled RANCHER_STATE and make it bootable. The two supported methods, are generic and amazon-ebs. The approach can be translated to suit different needs.
+You can replace image name and `VERSION` with whatever is appropriate.
 
-The generic install type follows these steps:
+## Basics
 
-1. ) partition device with a single partition the size of the disk.
-2. ) format ext4 and label partition as RANCHER_STATE
-3. ) Install grub2 on device
-4. ) Place kernel/initrd and grub.cfg inside /boot on the device.
-5. ) Seeds the cloud-init data so that a ssh key or other RancherOS configuration can be set.
+When booting, RancherOS looks for a device labeled "RANCHER_STATE". If it finds a volume with that labeled the OS will mount the device and use it to store state.
 
-The amazon-ebs approach follows these steps:
+The scripts in this container will create an EFI disk partition (for GRUB2 boot loader and its configuration) and RancherOS state partition (labeled RANCHER_STATE).
 
-1. ) format the device (Ext4) and label RANCHER_STATE
-2. ) Add PV-GRUB configuration (menu.lst)
-3. ) Add Kernel and Initrd
-4. ) Sets Rancher to look for EC2 cloud-init data.
+The following steps are performed during install:
 
+1. ) partition device with EFI (200MB) and Linux partitions (the rest of the disk size).
+2. ) format EFI partition as vfat, RancherOS state as ext4 and label as RANCHER_STATE
+3. ) Install grub2 (actually,just copy grubaa46.efi) and grub.cfg on EFI partition
+4. ) Place kernel, initrd and device-tree file into /boot on the state partition.
+5. ) Seed the cloud-config data so that authorized_keys or other RancherOS configuration can be set.
 
 
 ## Usage
