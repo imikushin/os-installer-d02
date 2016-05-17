@@ -21,6 +21,7 @@ do
     esac
 done
 
+DEVICE=${DEVICE:-$(blkid | grep 'LABEL="RANCHER_STATE"' | awk '{print $1}' | sed 's/://' | grep -E '[0-9]+$' | sed -E 's/[0-9]+$//')}
 DEVICE=${DEVICE:?"Need to Pass a device name -d <dev>."}
 DIST=${DIST:-/dist}
 CLOUD_CONFIG=${CLOUD_CONFIG:-"${SCRIPTS_DIR}/conf/empty.yml"}
